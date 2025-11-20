@@ -20,8 +20,13 @@ volatile unsigned long pulseCount = 0;
 const float PULSES_PER_LITER = 200.0;
 const unsigned long FLOW_INTERVAL = 5000;
 
-float lastFlowLmin = 0.0; // litros por minuto
-float lastFlowLhour = 0.0; // litros por hora (nueva)
+float lastFlowLmin = 0.0;   // litros/min
+float lastFlowLhour = 0.0;  // litros/hora (nuevo)
+
+// ===== INTERRUPCIÓN DE FLUJO =====
+void IRAM_ATTR pulseInterrupt() {
+  pulseCount++;
+}
 
 // ================================
 // GPS
@@ -30,6 +35,8 @@ HardwareSerial GPS_Serial(2);
 #define GPS_RX 16
 #define GPS_TX 17
 #define GPS_BAUD 9600
+#define LCD_UPDATE 5000
+#define SD_HZ       1000
 
 TinyGPSPlus gps;
 
@@ -43,6 +50,7 @@ TinyGPSPlus gps;
 
 char todayFilename[20];
 
+// Funciones SD
 void writeFile(fs::FS &fs, const char *path, const char *message) {
   File file = fs.open(path, FILE_WRITE);
   if (!file) return;
@@ -68,8 +76,8 @@ void generateFilename(DateTime now) {
 // ================================
 TaskHandle_t hTaskLCD;
 
-// Variables compartidas
-int lcdPage = 0;                  // página actual (0,1,2)
+// variables compartidas
+int lcdPage = 0;
 char lcdTimeString[20] = "";
 bool lcdGpsFix = false;
 float lcdFlow = 0.0;
@@ -79,10 +87,14 @@ double lcdLon = 0.0;
 float lcdSpeed = 0.0;
 
 // ================================
-// TAREA LCD
+// TASK LCD
 // ================================
 void TaskLCD(void *pvParameters) {
+  vTaskDelay(pdMS_TO_TICKS(LCD_UPDATE));  // 1.5 segundos
   for (;;) {
+
+
+
     lcd.clear();
 
     if (lcdPage == 0) {
@@ -109,7 +121,7 @@ void TaskLCD(void *pvParameters) {
       lcd.print(lcdLon, 4);
 
     } else if (lcdPage == 2) {
-      // ===== PANTALLA 3 (NUEVA) =====
+      // ===== PANTALLA 3 =====
       lcd.setCursor(0, 0);
       lcd.print("Flow ");
       lcd.print(lcdFlowHour, 1);
@@ -121,11 +133,11 @@ void TaskLCD(void *pvParameters) {
       lcd.print(" km/h");
     }
 
-    // Cambiar pantalla
+    // Rotar página
     lcdPage++;
     if (lcdPage > 2) lcdPage = 0;
 
-    vTaskDelay(pdMS_TO_TICKS(1500*2));  // cambia cada 1.5 segundos
+    vTaskDelay(pdMS_TO_TICKS(LCD_UPDATE));  // 5 segundos
   }
 }
 
@@ -142,6 +154,7 @@ void setup() {
 
   lcd.init();
   lcd.backlight();
+  lcd.clear();
   lcd.print("Iniciando...");
 
   if (!rtc.begin()) {
@@ -155,11 +168,14 @@ void setup() {
   SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
   SD.begin(SD_CS);
 
-  // Crear la tarea LCD
+  lcd.setCursor(0, 1);
+  lcd.print("SD OK");
+
+  // Crear Task LCD
   xTaskCreatePinnedToCore(
     TaskLCD,
     "LCD_TASK",
-    2048,
+    2048*2,
     NULL,
     1,
     &hTaskLCD,
@@ -172,14 +188,14 @@ void setup() {
 // ================================
 void loop() {
 
-  // ====== GPS ======
+  // ===== GPS =====
   while (GPS_Serial.available() > 0) {
     gps.encode(GPS_Serial.read());
   }
 
   bool gpsFix = gps.location.isValid() && gps.location.age() < 2000;
 
-  // ====== Flujo ======
+  // ===== Flujo =====
   static unsigned long prevFlowMillis = 0;
   unsigned long nowMs = millis();
 
@@ -188,35 +204,31 @@ void loop() {
 
     float liters = pulseCount / PULSES_PER_LITER;
     lastFlowLmin = liters * (60.0 / (FLOW_INTERVAL / 1000.0));
-    lastFlowLhour = lastFlowLmin * 60.0;   // NUEVO: L/h
+    lastFlowLhour = lastFlowLmin * 60.0;  // L/h
 
     pulseCount = 0;
   }
 
-  // ====== RTC ======
+  // ===== RTC =====
   DateTime now = rtc.now();
   char timeString[20];
   snprintf(timeString, sizeof(timeString),
            "%02d:%02d:%02d",
            now.hour(), now.minute(), now.second());
 
-  // ================================
-  // PASAR INFO A LA TAREA LCD
-  // ================================
+  // ===== Pasar info a TaskLCD =====
   strcpy(lcdTimeString, timeString);
   lcdGpsFix = gpsFix;
   lcdFlow = lastFlowLmin;
   lcdFlowHour = lastFlowLhour;
   lcdLat = gpsFix ? gps.location.lat() : 0.0;
   lcdLon = gpsFix ? gps.location.lng() : 0.0;
-
-  // NUEVO: velocidad GPS
   lcdSpeed = gpsFix ? gps.speed.kmph() : 0.0;
 
-  // ======= GUARDADO SD 3 Hz =======
+  // ===== Guardado SD a 3 Hz =====
   static unsigned long lastSave = 0;
 
-  if (millis() - lastSave >= 1000) {
+  if (millis() - lastSave >= SD_HZ) {
     lastSave = millis();
 
     generateFilename(now);
