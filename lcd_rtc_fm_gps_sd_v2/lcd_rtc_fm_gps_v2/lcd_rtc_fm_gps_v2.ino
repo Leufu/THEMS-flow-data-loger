@@ -17,13 +17,17 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 const int flowPin = 13;
 volatile unsigned long pulseCount = 0;
 
+const float ML_PER_PULSE = 5.0;
 const float PULSES_PER_LITER = 200.0;
 const unsigned long FLOW_INTERVAL = 5000;
 
-float lastFlowLmin = 0.0;   // litros/min
-float lastFlowLhour = 0.0;  // litros/hora (nuevo)
+float lastFlowLmin = 0.0;
+float lastFlowLhour = 0.0;
 
-// ===== INTERRUPCIÓN DE FLUJO =====
+
+float totalLiters = 0.0;
+
+// ===== INTERRUPCIÓN =====
 void IRAM_ATTR pulseInterrupt() {
   pulseCount++;
 }
@@ -50,7 +54,6 @@ TinyGPSPlus gps;
 
 char todayFilename[20];
 
-// Funciones SD
 void writeFile(fs::FS &fs, const char *path, const char *message) {
   File file = fs.open(path, FILE_WRITE);
   if (!file) return;
@@ -76,7 +79,6 @@ void generateFilename(DateTime now) {
 // ================================
 TaskHandle_t hTaskLCD;
 
-// variables compartidas
 int lcdPage = 0;
 char lcdTimeString[20] = "";
 bool lcdGpsFix = false;
@@ -90,15 +92,12 @@ float lcdSpeed = 0.0;
 // TASK LCD
 // ================================
 void TaskLCD(void *pvParameters) {
-  vTaskDelay(pdMS_TO_TICKS(LCD_UPDATE));  // 1.5 segundos
+  vTaskDelay(pdMS_TO_TICKS(LCD_UPDATE));
+
   for (;;) {
-
-
-
     lcd.clear();
 
     if (lcdPage == 0) {
-      // ===== PANTALLA 1 =====
       lcd.setCursor(0, 0);
       lcd.print(lcdTimeString);
 
@@ -111,7 +110,6 @@ void TaskLCD(void *pvParameters) {
       lcd.print(" L/m");
 
     } else if (lcdPage == 1) {
-      // ===== PANTALLA 2 =====
       lcd.setCursor(0, 0);
       lcd.print("Lat:");
       lcd.print(lcdLat, 4);
@@ -121,7 +119,6 @@ void TaskLCD(void *pvParameters) {
       lcd.print(lcdLon, 4);
 
     } else if (lcdPage == 2) {
-      // ===== PANTALLA 3 =====
       lcd.setCursor(0, 0);
       lcd.print("Flow ");
       lcd.print(lcdFlowHour, 1);
@@ -131,13 +128,23 @@ void TaskLCD(void *pvParameters) {
       lcd.print("Speed ");
       lcd.print(lcdSpeed, 1);
       lcd.print(" km/h");
+
+    } else if (lcdPage == 3) {
+    
+      lcd.setCursor(0, 0);
+      lcd.print("Consumo:");
+      lcd.print(totalLiters, 1);
+
+      lcd.print(" mL");
+      lcd.setCursor(0, 1);
+      lcd.print("Flow L/m: ");
+      lcd.print(lcdFlow, 2);
     }
 
-    // Rotar página
     lcdPage++;
-    if (lcdPage > 2) lcdPage = 0;
+    if (lcdPage > 3) lcdPage = 0;
 
-    vTaskDelay(pdMS_TO_TICKS(LCD_UPDATE));  // 5 segundos
+    vTaskDelay(pdMS_TO_TICKS(LCD_UPDATE));
   }
 }
 
@@ -171,11 +178,10 @@ void setup() {
   lcd.setCursor(0, 1);
   lcd.print("SD OK");
 
-  // Crear Task LCD
   xTaskCreatePinnedToCore(
     TaskLCD,
     "LCD_TASK",
-    2048*2,
+    2048 * 2,
     NULL,
     1,
     &hTaskLCD,
@@ -188,7 +194,6 @@ void setup() {
 // ================================
 void loop() {
 
-  // ===== GPS =====
   while (GPS_Serial.available() > 0) {
     gps.encode(GPS_Serial.read());
   }
@@ -203,8 +208,14 @@ void loop() {
     prevFlowMillis = nowMs;
 
     float liters = pulseCount / PULSES_PER_LITER;
+
+    //totalLiters += liters;   
+    totalLiters = (float)pulseCount*ML_PER_PULSE;    
+
     lastFlowLmin = liters * (60.0 / (FLOW_INTERVAL / 1000.0));
-    lastFlowLhour = lastFlowLmin * 60.0;  // L/h
+    lastFlowLhour = lastFlowLmin * 60.0;
+
+      Serial.printf("pulse: %i \t liters: %f \t  litros ml: %f \t litros per hour: %f \n ",(int)pulseCount,liters, totalLiters, lastFlowLhour);
 
     pulseCount = 0;
   }
@@ -216,7 +227,7 @@ void loop() {
            "%02d:%02d:%02d",
            now.hour(), now.minute(), now.second());
 
-  // ===== Pasar info a TaskLCD =====
+  // ===== Pasar info a LCD =====
   strcpy(lcdTimeString, timeString);
   lcdGpsFix = gpsFix;
   lcdFlow = lastFlowLmin;
@@ -225,7 +236,7 @@ void loop() {
   lcdLon = gpsFix ? gps.location.lng() : 0.0;
   lcdSpeed = gpsFix ? gps.speed.kmph() : 0.0;
 
-  // ===== Guardado SD a 1 Hz =====
+  // ===== Guardado SD =====
   static unsigned long lastSave = 0;
 
   if (millis() - lastSave >= SD_HZ) {
@@ -234,19 +245,21 @@ void loop() {
     generateFilename(now);
 
     if (!SD.exists(todayFilename)) {
-      writeFile(SD, todayFilename, "fecha,hora,flow,lat,lon,fix,vel\n");
+      writeFile(SD, todayFilename,
+                "fecha,hora,flow,lat,lon,fix,vel,litros\n");
     }
 
-    char line[160];
+    char line[200];
     snprintf(line, sizeof(line),
-             "%04d-%02d-%02d,%s,%.3f,%.6f,%.6f,%d,%.2f\n",
+             "%04d-%02d-%02d,%s,%.3f,%.6f,%.6f,%d,%.2f,%.3f\n",
              now.year(), now.month(), now.day(),
              timeString,
              lastFlowLmin,
              gpsFix ? gps.location.lat() : 0.0,
              gpsFix ? gps.location.lng() : 0.0,
              gpsFix ? 1 : 0,
-             lcdSpeed);
+             lcdSpeed,
+             totalLiters);
 
     appendFile(SD, todayFilename, line);
 
