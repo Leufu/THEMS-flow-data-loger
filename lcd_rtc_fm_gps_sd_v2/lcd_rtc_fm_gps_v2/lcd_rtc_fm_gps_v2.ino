@@ -225,7 +225,7 @@ void loop() {
   lcdLon = gpsFix ? gps.location.lng() : 0.0;
   lcdSpeed = gpsFix ? gps.speed.kmph() : 0.0;
 
-  // ===== Guardado SD a 3 Hz =====
+  // ===== Guardado SD a 1 Hz =====
   static unsigned long lastSave = 0;
 
   if (millis() - lastSave >= SD_HZ) {
