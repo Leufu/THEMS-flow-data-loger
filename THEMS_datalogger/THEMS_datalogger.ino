@@ -109,12 +109,12 @@ void TaskLCD(void *pvParameters) {
       lcd.setCursor(13, 0); lcd.print(lcdGpsFix ? "FIX" : "NO");
       
       lcd.setCursor(0, 1); lcd.print("Vel: "); 
-      lcd.print(lcdSpeedKnots, 1); lcd.print(" Nud");
+      lcd.print(lcdSpeedKnots, 1); lcd.print(" [kn]");
     } 
     // PAGINA 2: TOTAL
     else if (lcdPage == 2) {
       lcd.setCursor(0, 0); lcd.print(lcdTimeString);
-      lcd.setCursor(13, 0); lcd.print(lcdGpsFix ? "FIX" : "NO");
+      lcd.setCursor(13, 0); lcd.print(lcdGpsFix ? "FIX" : "NO FIX");
 
       lcd.setCursor(0, 1); lcd.print("Tot: "); 
       lcd.print(lcdTotalLiters, 1); lcd.print(" L");
@@ -218,7 +218,7 @@ void loop() {
              );
 
     appendFile(SD, todayFilename, line);
-    // Serial.print("SD Log: "); Serial.print(line); // Descomentar para debug
+    Serial.print("SD Log: "); Serial.print(line); // Descomentar para debug
   }
   delay(1);
 }
