@@ -15,17 +15,20 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 // SENSOR DE FLUJO
 // ================================
 const int flowPin = 13;
-volatile unsigned long pulseCount = 0;
+volatile unsigned long pulseCount = 0; // Pulsos desde la última medición
 
-const float ML_PER_PULSE = 5.0;
-const float PULSES_PER_LITER = 200.0;
-const unsigned long FLOW_INTERVAL = 5000;
+// Constantes de calibración del sensor
+const float ML_PER_PULSE = 5.0; // Mililitros por pulso (ajusta según tu sensor)
+const float PULSES_PER_LITER = 200.0; // Pulsos por litro
+const unsigned long FLOW_INTERVAL = 1000; // Periodo de muestreo en ms (1 segundo)
 
 float lastFlowLmin = 0.0;
 float lastFlowLhour = 0.0;
 
+// Variables de Acumulación
+// Cambiamos el nombre para ser más explícitos y la inicializamos globalmente
+float totalLitersConsumed = 0.0; 
 
-float totalLiters = 0.0;
 
 // ===== INTERRUPCIÓN =====
 void IRAM_ATTR pulseInterrupt() {
@@ -33,7 +36,7 @@ void IRAM_ATTR pulseInterrupt() {
 }
 
 // ================================
-// GPS
+// GPS (sin cambios)
 // ================================
 HardwareSerial GPS_Serial(2);
 #define GPS_RX 16
@@ -45,7 +48,7 @@ HardwareSerial GPS_Serial(2);
 TinyGPSPlus gps;
 
 // ================================
-// SD
+// SD (sin cambios)
 // ================================
 #define SD_MISO 19
 #define SD_MOSI 23
@@ -87,9 +90,10 @@ float lcdFlowHour = 0.0;
 double lcdLat = 0.0;
 double lcdLon = 0.0;
 float lcdSpeed = 0.0;
+float lcdTotalLiters = 0.0; // Nuevo para el total
 
 // ================================
-// TASK LCD
+// TASK LCD (Actualizada)
 // ================================
 void TaskLCD(void *pvParameters) {
   vTaskDelay(pdMS_TO_TICKS(LCD_UPDATE));
@@ -130,12 +134,12 @@ void TaskLCD(void *pvParameters) {
       lcd.print(" km/h");
 
     } else if (lcdPage == 3) {
-    
+      
       lcd.setCursor(0, 0);
-      lcd.print("Consumo:");
-      lcd.print(totalLiters, 1);
+      lcd.print("Consumido:"); // Etiqueta más clara
+      lcd.print(lcdTotalLiters, 2); // Usa el total
+      lcd.print(" L"); // Corregido a Litros (L)
 
-      lcd.print(" mL");
       lcd.setCursor(0, 1);
       lcd.print("Flow L/m: ");
       lcd.print(lcdFlow, 2);
@@ -149,7 +153,7 @@ void TaskLCD(void *pvParameters) {
 }
 
 // ================================
-// SETUP
+// SETUP (sin cambios)
 // ================================
 void setup() {
   Serial.begin(115200);
@@ -190,7 +194,7 @@ void setup() {
 }
 
 // ================================
-// LOOP
+// LOOP (Actualizada)
 // ================================
 void loop() {
 
@@ -207,27 +211,37 @@ void loop() {
   if (nowMs - prevFlowMillis >= FLOW_INTERVAL) {
     prevFlowMillis = nowMs;
 
-    float liters = pulseCount / PULSES_PER_LITER;
+    // 1. CALCULAR LITROS CONSUMIDOS EN ESTE INTERVALO (5 segundos)
+    // Usamos pulseCount que es la cantidad de pulsos acumulados en FLOW_INTERVAL
+    float litersInInterval = (float)pulseCount / PULSES_PER_LITER;
 
-    //totalLiters += liters;   
-    totalLiters = (float)pulseCount*ML_PER_PULSE;    
+    // 2. ACUMULAR EL TOTAL
+    totalLitersConsumed += litersInInterval; // Acumula el consumo total
 
-    lastFlowLmin = liters * (60.0 / (FLOW_INTERVAL / 1000.0));
+    // 3. CALCULAR LA TASA DE FLUJO INSTANTÁNEA (L/min y L/h)
+    // lastFlowLmin = (Litros en intervalo) * (Tasa de Intervalos por minuto)
+    lastFlowLmin = litersInInterval * (60000.0 / FLOW_INTERVAL);
     lastFlowLhour = lastFlowLmin * 60.0;
 
-      Serial.printf("pulse: %i \t liters: %f \t  litros ml: %f \t litros per hour: %f \n ",(int)pulseCount,liters, totalLiters, lastFlowLhour);
+    // 4. RESETEAR EL CONTADOR DE PULSOS
+    // Esto es crucial para que la siguiente medición (después de 5s) sea limpia.
+    pulseCount = 0; 
+    
+    // Debug en Serial
+    Serial.printf("Pulsos en %i s: %i | Consumo Intervalo: %.3f L | Flujo: %.2f L/min | Acumulado Total: %.3f L\n", 
+                  (int)(FLOW_INTERVAL/1000), (int)pulseCount, litersInInterval, lastFlowLmin, totalLitersConsumed);
 
-    pulseCount = 0;
   }
+  // El código continua ejecutándose aquí sin esperar los 5 segundos.
 
-  // ===== RTC =====
+  // ===== RTC (sin cambios) =====
   DateTime now = rtc.now();
   char timeString[20];
   snprintf(timeString, sizeof(timeString),
            "%02d:%02d:%02d",
            now.hour(), now.minute(), now.second());
 
-  // ===== Pasar info a LCD =====
+  // ===== Pasar info a LCD (Actualizada) =====
   strcpy(lcdTimeString, timeString);
   lcdGpsFix = gpsFix;
   lcdFlow = lastFlowLmin;
@@ -235,8 +249,9 @@ void loop() {
   lcdLat = gpsFix ? gps.location.lat() : 0.0;
   lcdLon = gpsFix ? gps.location.lng() : 0.0;
   lcdSpeed = gpsFix ? gps.speed.kmph() : 0.0;
+  lcdTotalLiters = totalLitersConsumed; // Pasa el total al LCD
 
-  // ===== Guardado SD =====
+  // ===== Guardado SD (Actualizada) =====
   static unsigned long lastSave = 0;
 
   if (millis() - lastSave >= SD_HZ) {
@@ -246,7 +261,7 @@ void loop() {
 
     if (!SD.exists(todayFilename)) {
       writeFile(SD, todayFilename,
-                "fecha,hora,flow,lat,lon,fix,vel,litros\n");
+                 "fecha,hora,flow_Lmin,lat,lon,fix,vel_kmh,litros_acumulados\n"); // Encabezado más claro
     }
 
     char line[200];
@@ -254,12 +269,12 @@ void loop() {
              "%04d-%02d-%02d,%s,%.3f,%.6f,%.6f,%d,%.2f,%.3f\n",
              now.year(), now.month(), now.day(),
              timeString,
-             lastFlowLmin,
+             lastFlowLmin, // Flujo instantáneo
              gpsFix ? gps.location.lat() : 0.0,
              gpsFix ? gps.location.lng() : 0.0,
              gpsFix ? 1 : 0,
              lcdSpeed,
-             totalLiters);
+             totalLitersConsumed); // ¡Guarda el acumulado!
 
     appendFile(SD, todayFilename, line);
 
@@ -269,4 +284,3 @@ void loop() {
 
   delay(5);
 }
-
